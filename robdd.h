@@ -3,13 +3,14 @@
 
 #define TABLE_UNICITE_MAX_SIZE 256
 
-struct node 
+typedef struct node 
 {
   char* label;
 
   struct node* left;
   struct node* right;
-}
+
+} node_t;
 
 extern int tu_index;
 extern const char table_unicite[200];
