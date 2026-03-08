@@ -1,67 +1,159 @@
-#include <stddef.h>
+#include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
 #include "robdd.h"
 
-node_t* parse(char* expression) 
+typedef struct
 {
-    // base case : if the expression is a variable, return a node with the variable as label
-  if (expression[0] != '(')
+  const char* s;
+  size_t i;
+} parser_t;
+
+/* Saute les espaces et caractères blancs dans l'expression */
+static void skip_spaces(parser_t* p)
+{
+  while (p->s[p->i] != '\0' && isspace((unsigned char)p->s[p->i]))
+    p->i++;
+}
+
+static node_t* parse_or(parser_t* p);
+
+/* Crée un nœud feuille pour une variable (avec enfants 0 et 1) */
+static node_t* make_var_node(char var)
+{
+  char label[2] = { var, '\0' };
+  node_t* zero = create_node("0", NULL, NULL);
+  node_t* one = create_node("1", NULL, NULL);
+  return create_node(label, zero, one);
+}
+
+/* Parse une valeur primaire : variable, constante (0 ou 1), ou expression entre parenthèses */
+static node_t* parse_primary(parser_t* p)
+{
+  skip_spaces(p);
+  char ch = p->s[p->i];
+
+  if (ch == '(')
   {
-    return create_node((char[2]){ expression[0], 0 }, 
-                       create_node("0", NULL, NULL),
-                       create_node("1", NULL, NULL));
+    p->i++;
+    node_t* inside = parse_or(p);
+    skip_spaces(p);
+    if (p->s[p->i] == ')')
+      p->i++;
+    return inside;
   }
 
-  // recursive case : parse the left and right subexpressions
-  size_t i = 1; // skip the first '('
-  int count = 0; // count the number of parentheses
-  while (i < strlen(expression)) {
-      if (expression[i] == '(') {
-          count++;
-      } else if (expression[i] == ')') {
-          count--;
-      } else if ((expression[i] == '.' || expression[i] == '+' || expression[i] == '!' || expression[i] == '*') && count == 0) {
-          break; // found the operator at the top level
-      }
-      i++;
-  }
-  char operator = expression[i];
-  char* left_expr = strndup(expression + 1, i - 1); // left subexpression
-  char* right_expr = strndup(expression + i + 1, strlen(expression) - i - 2); // right subexpression
-  node_t* left_node = parse(left_expr);
-  node_t* right_node = parse(right_expr);
-  
-  node_t* result;
-  if (operator == '.') {
-    result = AND(left_node, right_node);
-  } else if (operator == '+') {
-    result = OR(left_node, right_node);
-  } else if (operator == '!') {
-    result = NOT(left_node);
-  } else if (operator == '*') {
-    result = XOR(left_node, right_node);
+  if (ch == '0' || ch == '1')
+  {
+    p->i++;
+    if (ch == '0')
+      return create_node("0", NULL, NULL);
+    return create_node("1", NULL, NULL);
   }
 
-  free_node(left_node);
-  free_node(right_node);
-  free(left_expr);
-  free(right_expr);
-  return result;
+  if (isalpha((unsigned char)ch))
+  {
+    p->i++;
+    return make_var_node(ch);
+  }
+
+  return create_node("0", NULL, NULL);
 }
 
-void print_tree(node_t* node, int level) 
-{ // TODO: use lib to display the tree
-    if (node == NULL) {
-        return;
-    }
-    print_tree(node->right, level + 1);
-    for (int i = 0; i < level; i++) {
-        printf("   ");
-    }
-    printf("%s\n", node->label);
-    print_tree(node->left, level + 1);
+/* Parse une expression unaire : gère la négation (!) */
+static node_t* parse_unary(parser_t* p)
+{
+  skip_spaces(p);
+  if (p->s[p->i] == '!')
+  {
+    p->i++;
+    node_t* operand = parse_unary(p);
+    return NOT(operand);
+  }
+
+  return parse_primary(p);
 }
 
+/* Parse une expression ET (.) : priorité moyenne */
+static node_t* parse_and(parser_t* p)
+{
+  node_t* left = parse_unary(p);
+
+  while (1)
+  {
+    skip_spaces(p);
+    if (p->s[p->i] != '.')
+      break;
+
+    p->i++;
+    node_t* right = parse_unary(p);
+    left = AND(left, right);
+  }
+
+  return left;
+}
+
+/* Parse une expression XOR (*) : priorité basse-moyenne */
+static node_t* parse_xor(parser_t* p)
+{
+  node_t* left = parse_and(p);
+
+  while (1)
+  {
+    skip_spaces(p);
+    if (p->s[p->i] != '*')
+      break;
+
+    p->i++;
+    node_t* right = parse_and(p);
+    left = XOR(left, right);
+  }
+
+  return left;
+}
+
+/* Parse une expression OU (+) : priorité basse */
+static node_t* parse_or(parser_t* p)
+{
+  node_t* left = parse_xor(p);
+
+  while (1)
+  {
+    skip_spaces(p);
+    if (p->s[p->i] != '+')
+      break;
+
+    p->i++;
+    node_t* right = parse_xor(p);
+    left = OR(left, right);
+  }
+
+  return left;
+}
+
+/* Parser : analyse et construit le ROBDD à partir d'une expression */
+node_t* parse(const char* expression)
+{
+  configure_variable_order(expression);
+
+  parser_t p;
+  p.s = expression;
+  p.i = 0;
+
+  return parse_or(&p);
+}
+
+void print_tree(node_t* node, int level)
+{
+  if (node == NULL)
+    return;
+
+  print_tree(node->right, level + 1);
+  for (int i = 0; i < level; i++)
+    printf("   ");
+
+  printf("%s\n", node->label);
+  print_tree(node->left, level + 1);
+}
